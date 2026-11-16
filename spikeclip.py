@@ -107,6 +107,43 @@ def chat_words(msgs, a, b, k=5):
 
 
 # ---------- 3. cut ----------
+UA = {"User-Agent": "Mozilla/5.0"}
+
+
+def _get(u):
+    import urllib.request
+    with urllib.request.urlopen(urllib.request.Request(u, headers=UA), timeout=60) as r:
+        return r.read()
+
+
+def hls_fetch(playlist_url, a, b, dest):
+    """Download only the HLS segments covering [a, b]. Returns start time of the first segment.
+    (Plain Python HTTP: YouTube stalls ffmpeg's own long-range requests.)"""
+    from urllib.parse import urljoin
+    text = _get(playlist_url).decode("utf-8", "replace")
+    t, dur, init, segs = 0.0, None, None, []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("#EXT-X-MAP:"):
+            m = re.search(r'URI="([^"]+)"', line)
+            init = urljoin(playlist_url, m.group(1)) if m else None
+        elif line.startswith("#EXTINF:"):
+            dur = float(line[8:].split(",")[0])
+        elif line and not line.startswith("#") and dur is not None:
+            if t + dur > a and t < b:
+                segs.append((t, urljoin(playlist_url, line)))
+            t += dur
+            dur = None
+    if not segs:
+        raise RuntimeError("no HLS segments in range")
+    with open(dest, "wb") as f:
+        if init:
+            f.write(_get(init))
+        for _, u in segs:
+            f.write(_get(u))
+    return segs[0][0]
+
+
 def cut_section(url, a, b, out, local=None):
     """Download only [a, b] seconds of the stream (never the whole VOD),
     or cut from a local recording (e.g. your own OBS recording of the stream)."""
@@ -116,9 +153,23 @@ def cut_section(url, a, b, out, local=None):
         run(["ffmpeg", "-v", "error", "-y", "-ss", f"{a:.2f}", "-t", f"{b - a:.2f}", "-i", local,
              "-c:v", "libx264", "-crf", "18", "-preset", "veryfast", "-c:a", "aac", str(out)])
         return
-    run(ytdlp("-f", "bv*[height<=1080]+ba/b", "-S", "vcodec:h264",
-              "--download-sections", f"*{a:.0f}-{b:.0f}", "--force-keyframes-at-cuts",
-              "--merge-output-format", "mp4", "-o", str(out), url))
+    # stream replays expose H.264 HLS playlists: fetch just the needed segments
+    r = subprocess.run(ytdlp("-g", "-f", "312+234/311+234/231+234/230+233/b[protocol^=m3u8]", url),
+                       capture_output=True, text=True, check=True)
+    lists = r.stdout.split()
+    parts = []
+    for k, pl in enumerate(lists):
+        part = out.with_suffix(f".part{k}.mp4")
+        t0 = hls_fetch(pl, a, b, part)
+        parts.append((part, t0))
+    cmd = ["ffmpeg", "-v", "error", "-y"]
+    for part, t0 in parts:
+        cmd += ["-ss", f"{a - t0:.2f}", "-t", f"{b - a:.2f}", "-i", str(part)]
+    cmd += ["-map", "0:v:0", "-map", f"{len(parts) - 1}:a:0",
+            "-c:v", "libx264", "-crf", "18", "-preset", "veryfast", "-c:a", "aac", str(out)]
+    run(cmd)
+    for part, _ in parts:
+        part.unlink(missing_ok=True)
 
 
 def srt_time(s):
