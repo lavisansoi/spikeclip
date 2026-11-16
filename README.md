@@ -29,6 +29,9 @@ Clip this stream for me using github.com/lavisansoi/spikeclip (follow its README
    give the user the exact install command for their OS and wait.
 4. Run `spikeclip.py "<link>" --clips 5` with the venv python. The chat download can take
    several minutes on long streams; keep the user posted.
+   If it stops with "AGE-RESTRICTED", ask the user for a different stream first; only if they
+   insist, explain the `--cookies cookies.txt` option (exported from their signed-in browser,
+   kept private, never committed).
 5. When done, list `out/<video id>/`: show each `CLIP_XX.mp4` with its `CLIP_XX_upload.txt`,
    best (highest spike score) first.
 
@@ -49,6 +52,7 @@ Options:
 | `--whisper` | small | caption model (`base` = faster, `medium` = better) |
 | `--video FILE` | | cut from your own recording of the stream instead of downloading |
 | `--no-captions` | | skip captions |
+| `--cookies FILE` | | browser cookies.txt, only for age-restricted streams (keep private) |
 
 Output: `out/<video id>/CLIP_01.mp4`, `CLIP_01_upload.txt`, …
 

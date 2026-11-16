@@ -18,6 +18,7 @@ import shutil
 
 PY = sys.executable
 STOP = set("the a an and or to of is it i you u me my this that in on for lol".split())
+COOKIES = None  # set by --cookies
 
 
 def ytdlp(*args):
@@ -26,7 +27,26 @@ def ytdlp(*args):
     cmd = [PY, "-m", "yt_dlp", "--no-warnings"]
     if not shutil.which("deno") and shutil.which("node"):
         cmd += ["--js-runtimes", "node"]
+    if COOKIES:
+        cmd += ["--cookies", COOKIES]
     return cmd + list(args)
+
+
+def preflight(url):
+    """Fail early, in plain words, if YouTube won't serve this stream."""
+    r = subprocess.run(ytdlp("--skip-download", "--print", "%(age_limit)s|%(channel)s - %(title)s", url),
+                       capture_output=True, text=True, encoding="utf-8")
+    err = (r.stderr or "").lower()
+    if r.returncode != 0:
+        if "age" in err or "sign in to confirm" in err or "inappropriate" in err:
+            sys.exit("STOP: this stream is AGE-RESTRICTED. YouTube only shares it with a signed-in account.\n"
+                     "Pick another stream, or export your YouTube cookies to cookies.txt "
+                     "(keep it private) and rerun with --cookies cookies.txt")
+        if "private" in err or "unavailable" in err:
+            sys.exit("STOP: this video is private or unavailable.")
+        sys.exit("STOP: YouTube refused this link:\n" + r.stderr.strip()[-400:])
+    age, _, title = r.stdout.strip().partition("|")
+    return title
 
 
 def run(cmd, **kw):
@@ -240,14 +260,16 @@ def main():
     ap.add_argument("--no-captions", action="store_true")
     ap.add_argument("--whisper", default="small")
     ap.add_argument("--video", help="local recording of the same stream (skip video download)")
+    ap.add_argument("--cookies", help="cookies.txt from your browser (only for age-restricted streams)")
     o = ap.parse_args()
 
     vid = re.search(r"(?:v=|youtu\.be/|live/)([\w-]{11})", o.url)
     work = Path(o.out) / (vid.group(1) if vid else "job")
     work.mkdir(parents=True, exist_ok=True)
 
-    title = subprocess.run(ytdlp("--print", "%(channel)s - %(title)s", o.url),
-                           capture_output=True, text=True, encoding="utf-8").stdout.strip()
+    global COOKIES
+    COOKIES = o.cookies
+    title = preflight(o.url)
     msgs = parse_chat(get_chat(o.url, work))
     print(f"{len(msgs)} chat messages")
     spikes = find_spikes(msgs, o.clips)
